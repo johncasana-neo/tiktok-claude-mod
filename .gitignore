@@ -1,0 +1,8 @@
+.DS_Store
+Thumbs.db
+node_modules/
+# Written by Claude Code next to a loaded mod, for the editor
+**/.claude-plugin/types/
+# The mod keeps a Chrome profile (your TikTok session) under ~/.claude-mods, outside the repo.
+# If you ever point it inside, never commit it.
+.claude-mods/

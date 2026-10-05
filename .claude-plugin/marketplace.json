@@ -1,0 +1,15 @@
+{
+  "name": "tiktok-claude-mod",
+  "owner": { "name": "John Casana", "url": "https://github.com/johncasana-neo" },
+  "metadata": {
+    "description": "A Claude Code mod that plays TikTok while Claude works and pauses it when Claude is done."
+  },
+  "plugins": [
+    {
+      "name": "tiktok",
+      "source": "./plugins/tiktok",
+      "description": "TikTok in a Chrome window next to your terminal: it plays while Claude works and pauses when Claude is done. Windows only.",
+      "category": "entertainment"
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "name": "tiktok",
+  "version": "0.1.0",
+  "description": "TikTok in a Chrome window: plays while Claude works, pauses when Claude is done.",
+  "author": {
+    "name": "John Casana",
+    "url": "https://github.com/johncasana-neo"
+  },
+  "homepage": "https://github.com/johncasana-neo/tiktok-claude-mod",
+  "repository": "https://github.com/johncasana-neo/tiktok-claude-mod",
+  "license": "MIT",
+  "keywords": ["tiktok", "mod", "fun", "windows"]
+}
