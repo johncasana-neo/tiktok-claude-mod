@@ -47,6 +47,93 @@ const SET_PAUSED = paused => `(() => {
   if (v) v.play().catch(() => {})
 })()`
 
+// Glues the window to the right edge of Claude's terminal, inside it, below its title bar (DOCK_TOP keeps the
+// terminal's own buttons clear; the dock calibrates for Windows' invisible borders and the screen's scaling).
+// The window is on top while the terminal or the window itself has the focus, and behind the terminal otherwise;
+// it follows the terminal when moved or resized and minimizes with it. Win32 from PowerShell: Node has no FFI.
+const DOCK_TOP = 40
+const DOCK = `
+Add-Type -TypeDefinition @'
+using System;
+using System.Diagnostics;
+using System.Runtime.InteropServices;
+using System.Threading;
+public static class Dock {
+  public struct RECT { public int L, T, R, B; }
+  delegate bool EnumProc(IntPtr h, IntPtr p);
+  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll")] public static extern bool SetProcessDpiAwarenessContext(IntPtr c);
+  [DllImport("user32.dll")] static extern bool IsWindow(IntPtr h);
+  [DllImport("user32.dll")] static extern bool IsIconic(IntPtr h);
+  [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
+  [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr h, out RECT r);
+  [DllImport("user32.dll")] static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int cx, int cy, uint f);
+  [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr h, int cmd);
+  [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+  [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc f, IntPtr p);
+  [DllImport("user32.dll")] static extern uint GetDpiForWindow(IntPtr h);
+  [DllImport("dwmapi.dll")] static extern int DwmGetWindowAttribute(IntPtr h, int a, out RECT r, int size);
+  // What shows of a window: its rect less the invisible resize border Windows 10/11 draws around it.
+  static RECT Frame(IntPtr h) { RECT r; if (DwmGetWindowAttribute(h, 9, out r, 16) != 0) GetWindowRect(h, out r); return r; }
+  // Chrome's window: the largest visible one its browser process owns.
+  static IntPtr Find(uint pid) {
+    IntPtr best = IntPtr.Zero; long most = 200 * 200;
+    EnumWindows((h, p) => {
+      uint owner; RECT r; GetWindowThreadProcessId(h, out owner);
+      if (owner == pid && IsWindowVisible(h) && GetWindowRect(h, out r) && (long)(r.R - r.L) * (r.B - r.T) > most) { best = h; most = (long)(r.R - r.L) * (r.B - r.T); }
+      return true;
+    }, IntPtr.Zero);
+    return best;
+  }
+  public static void Run(IntPtr term, int pid, int width, int top, bool aware) {
+    Process chrome = Process.GetProcessById(pid);
+    IntPtr c = IntPtr.Zero, TOPMOST = new IntPtr(-1);
+    const uint NOACTIVATE = 0x10, SHOW = 0x40;
+    string last = "";
+    bool minimized = false;
+    while (!chrome.HasExited && IsWindow(term)) {
+      Thread.Sleep(100);
+      if (!IsWindow(c)) { c = Find((uint)pid); last = ""; if (c == IntPtr.Zero) continue; }
+      if (IsIconic(term)) { if (!minimized) { ShowWindow(c, 7); minimized = true; } continue; }
+      if (minimized) { ShowWindow(c, 4); minimized = false; last = ""; }
+      if (IsIconic(c)) continue; // minimized by the person: theirs to bring back
+      double s = aware ? GetDpiForWindow(term) / 96.0 : 1;
+      if (s <= 0) s = 1;
+      RECT f = Frame(term), cw, cf = Frame(c);
+      GetWindowRect(c, out cw);
+      int w = (int)(width * s), t = (int)(top * s);
+      int x = f.R - w - (cf.L - cw.L), y = f.T + t - (cf.T - cw.T);
+      int cx = w + (cf.L - cw.L) + (cw.R - cf.R), cy = f.B - f.T - t + (cf.T - cw.T) + (cw.B - cf.B);
+      IntPtr fg = GetForegroundWindow();
+      bool front = fg == term || fg == c;
+      string now = x + "," + y + "," + cx + "," + cy + "," + front;
+      if (now == last) continue;
+      last = now;
+      // Placed after the terminal, a non-topmost window, it stops being topmost and sits just behind it.
+      SetWindowPos(c, front ? TOPMOST : term, x, y, cx, cy, NOACTIVATE | (front ? SHOW : 0));
+    }
+  }
+}
+'@
+$aware = [Dock]::SetProcessDpiAwarenessContext([IntPtr](-4))
+$term = [Dock]::GetForegroundWindow()
+[Console]::Out.WriteLine('dock ready')
+$chrome = [Console]::In.ReadLine()
+if ($chrome) { [Dock]::Run($term, [int]$chrome, ${WIDTH}, ${DOCK_TOP}, $aware) }
+`
+
+// Starts the dock and resolves once it has noted the foreground window, which is the terminal /tiktok was typed in;
+// null when it cannot run (no PowerShell, Add-Type blocked by policy): the window then docks to the screen's edge.
+// It is told Chrome's pid on stdin, and ends with Chrome, with the terminal, or when this process closes its stdin.
+const startDock = () =>
+  new Promise(done => {
+    const ps = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(DOCK, 'utf16le').toString('base64')], { stdio: ['pipe', 'pipe', 'ignore'], windowsHide: true })
+    const timer = setTimeout(() => (ps.kill(), done(null)), 8000)
+    const fail = () => (clearTimeout(timer), done(null))
+    ps.on('error', fail).on('exit', fail)
+    ps.stdout.once('data', () => (clearTimeout(timer), done(ps)))
+  })
+
 // Whether the control port is free, checked before any window opens.
 const portFree = () =>
   new Promise(done => {
@@ -75,6 +162,7 @@ async function main() {
   if (!(await portFree())) throw new Error(`TikTok cannot start: port ${CTL} is used by another program`)
   const portFile = `${profile}/DevToolsActivePort`
   fs.rmSync(portFile, { force: true }) // Chrome picks a free debugging port and writes it here
+  const dock = await startDock() // before Chrome opens and may take the front from the terminal
   const proc = (chromeProc = spawn(
     chrome,
     [
@@ -94,6 +182,7 @@ async function main() {
     { stdio: 'ignore' },
   ))
   proc.on('exit', () => process.exit(0)) // the person closed the window
+  dock?.stdin.write(`${proc.pid}\n`)
 
   // Wait for the page target, then talk CDP over its websocket.
   let target
@@ -143,8 +232,8 @@ async function main() {
   await run(GUARD)
   await run(SET_PAUSED(paused))
 
-  // Dock the window to the right edge of the screen, full height, like a side panel.
-  const screen = (await run('({ l: screen.availLeft, t: screen.availTop, w: screen.availWidth, h: screen.availHeight })')).result?.result?.value
+  // Without the dock: the right edge of the screen, full height, like a side panel.
+  const screen = !dock && (await run('({ l: screen.availLeft, t: screen.availTop, w: screen.availWidth, h: screen.availHeight })')).result?.result?.value
   const win = (await cdp('Browser.getWindowForTarget', { targetId: target.id })).result
   if (screen && win) {
     await cdp('Browser.setWindowBounds', { windowId: win.windowId, bounds: { left: screen.l + screen.w - WIDTH, top: screen.t, width: WIDTH, height: screen.h } })
@@ -176,6 +265,7 @@ async function main() {
 
   const shutdown = async () => {
     await cdp('Browser.close').catch(() => {})
+    dock?.kill()
     proc.kill()
     process.exit(0)
   }

@@ -10,7 +10,7 @@ A [Claude Code](https://claude.com/claude-code) mod that plays TikTok in a small
 
 ## What it does
 
-1. You type `/tiktok`. A narrow Chrome window opens on the right edge of your screen, full height, like a side panel.
+1. You type `/tiktok`. A narrow Chrome window docks inside the right edge of your terminal, like a side panel: it stays on top while the terminal (or TikTok) has the focus, drops behind it when you switch to another app, follows the terminal when you move or resize it, and minimizes with it.
 2. You send Claude a prompt. If the turn lasts more than ~4 seconds, the video starts playing (short answers never flash it on and off).
 3. Claude finishes. The video **pauses** where it was, the status line shows `⏸ TikTok`, and a toast in the terminal says `Claude is done: TikTok paused`.
 4. Next prompt, it resumes.
@@ -70,6 +70,7 @@ All sessions share one window. It plays while **any** session that ran `/tiktok`
 
 - `hooks/register.ts` listens to Claude Code's turn events and the `/tiktok` command.
 - `helper/tiktok.cjs` is a small Node program with no dependencies. It starts Chrome in app mode and drives the page over the Chrome DevTools Protocol (pause/play, scroll, mute, window position). It listens on `127.0.0.1:48731` for the mod's commands.
+- The docking is a small PowerShell child of the helper (Win32 calls through `Add-Type`). It docks to whichever window had the focus when you ran `/tiktok`, which is normally your terminal. If PowerShell cannot run it, the window docks to the right edge of the screen instead.
 - While paused, a small script in the page re-pauses anything TikTok tries to autoplay, unless you just clicked.
 
 ## Privacy and security
